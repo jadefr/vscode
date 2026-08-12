@@ -203,6 +203,43 @@ suite('ActionListWidget', () => {
 		assert.ok(widget.domNode.textContent?.includes('ma-fresh-result'));
 	});
 
+	test('does not filter while an IME composition is in progress', () => {
+		const filters: string[] = [];
+		const widget = createActionListWidget(disposables, {
+			onFilter: async filter => {
+				filters.push(filter);
+				return [action(`result-${filter}`)];
+			},
+		});
+
+		assert.ok(widget.filterInput);
+		widget.filterInput.dispatchEvent(new Event('compositionstart'));
+		typeFilter(widget, 'd');
+		typeFilter(widget, 'deepseek');
+		widget.filterInput.value = 'DeepSeek';
+		widget.filterInput.dispatchEvent(new Event('compositionend'));
+		// Chromium fires a trailing `input` for the committed text, which must not re-filter.
+		typeFilter(widget, 'DeepSeek');
+
+		assert.deepStrictEqual(filters, ['DeepSeek']);
+	});
+
+	test('cancels an in-flight dynamic filter when a composition starts', async () => {
+		const pending = new DeferredPromise<readonly IActionListItem<ITestActionItem>[]>();
+		const widget = createActionListWidget(disposables, {
+			onFilter: () => pending.p,
+		});
+
+		typeFilter(widget, 'd');
+		assert.ok(widget.filterInput);
+		widget.filterInput.dispatchEvent(new Event('compositionstart'));
+
+		// Resolving now must not splice/re-layout the list underneath the IME candidate window.
+		pending.complete([action('stale-result')]);
+		await timeout(0);
+		assert.ok(!widget.domNode.textContent?.includes('stale-result'));
+	});
+
 	test('batches row width writes before reading layout', () => {
 		const widget = createActionListWidget(disposables, {
 			items: [
@@ -377,4 +414,30 @@ suite('ActionListWidget', () => {
 			{ text: 'Learn more', href: 'https://aka.ms/test' },
 		);
 	});
+
+	test('focuses the configured initial item when opened', () => {
+		const widget = createActionListWidget(disposables, {
+			items: [action('first'), action('active'), action('last')],
+			listOptions: { initialFocusItemId: 'active' },
+		});
+
+		widget.focus();
+
+		assert.strictEqual(widget.getFocusedElement()?.item?.id, 'active');
+	});
+
+	test('consumes initial focus before later filtering and refocusing', () => {
+		const widget = createActionListWidget(disposables, {
+			items: [action('match-first'), action('match-initial'), action('other')],
+			listOptions: { initialFocusItemId: 'match-initial' },
+		});
+
+		widget.focus();
+		widget.focusPrevious();
+		typeFilter(widget, 'match');
+		widget.focus();
+
+		assert.strictEqual(widget.getFocusedElement()?.item?.id, 'match-first');
+	});
+
 });

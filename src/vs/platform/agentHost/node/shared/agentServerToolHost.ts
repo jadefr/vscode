@@ -10,9 +10,8 @@ import type { AgentHostStateManager } from '../agentHostStateManager.js';
 
 /**
  * Result of a server tool, passed to {@link IServerToolGroup.getDisplay} so the
- * owning group can tailor its past-tense message to what the tool returned
- * (for example a count parsed from the textual result). Absent while the tool
- * is still running.
+ * owning group can tailor its past-tense message to what the tool returned.
+ * Absent while the tool is still running.
  */
 export interface IServerToolDisplayResult {
 	/** The textual tool result (the string the group's `execute` returned). */
@@ -31,9 +30,9 @@ export interface IServerToolDisplayResult {
 export interface IServerToolDisplay {
 	/** Human-readable tool name (e.g. "List Comments"). */
 	readonly displayName?: string;
-	/** Present-tense message shown while the tool runs (e.g. "Checking comments"). */
+	/** Message shown while the tool runs (e.g. "List comments"). */
 	readonly invocationMessage?: StringOrMarkdown;
-	/** Past-tense message shown once the tool completes (e.g. "Checked 3 comments"). */
+	/** Past-tense message shown once the tool completes. When omitted, the provider reuses `invocationMessage`. */
 	readonly pastTenseMessage?: StringOrMarkdown;
 }
 
@@ -55,13 +54,21 @@ export interface IServerToolGroup {
 	/** Tool definitions this group advertises on the session's `serverTools`. */
 	readonly definitions: readonly ToolDefinition[];
 	/**
-	 * Whether {@link toolName} (one of this group's {@link definitions}) must be
-	 * confirmed by the user before it runs. Providers exclude such tools from
-	 * their server-tool auto-approve lists so the call surfaces a confirmation.
-	 * Absent or `false` means the tool is auto-approved like every other server
-	 * tool.
+	 * Whether {@link toolName} (one of this group's {@link definitions}) can
+	 * ever prompt for confirmation. Providers exclude such tools from their
+	 * server-tool auto-approve lists so the call routes through a confirmation
+	 * path. Absent or `false` means the tool is auto-approved like every other
+	 * server tool.
 	 */
-	requiresConfirmation?(toolName: string): boolean;
+	canRequireConfirmation?(toolName: string): boolean;
+	/**
+	 * Whether {@link toolName} needs to prompt for the invocation currently
+	 * being made against {@link sessionUri}. Implement this for
+	 * state-dependent confirmation (e.g. nothing to confirm yet) while keeping
+	 * {@link canRequireConfirmation} stable for provider allow-lists. Absent
+	 * falls back to {@link canRequireConfirmation}.
+	 */
+	requiresConfirmation?(stateManager: AgentHostStateManager, sessionUri: URI, toolName: string): boolean;
 	/**
 	 * Executes {@link toolName} (one of this group's {@link definitions})
 	 * against the session's state, dispatching any resulting actions through
@@ -130,8 +137,15 @@ export class AgentServerToolHost implements IAgentServerToolHost {
 		});
 	}
 
-	requiresConfirmation(toolName: string): boolean {
-		return this._groupByToolName.get(toolName)?.requiresConfirmation?.(toolName) ?? false;
+	canRequireConfirmation(toolName: string): boolean {
+		return this._groupByToolName.get(toolName)?.canRequireConfirmation?.(toolName) ?? false;
+	}
+
+	requiresConfirmation(sessionUri: URI, toolName: string): boolean {
+		const group = this._groupByToolName.get(toolName);
+		return group?.requiresConfirmation?.(this._stateManager, sessionUri, toolName)
+			?? group?.canRequireConfirmation?.(toolName)
+			?? false;
 	}
 
 	executeTool(sessionUri: URI, toolName: string, rawArgs: unknown): string | Promise<string> {
